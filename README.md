@@ -40,47 +40,28 @@ n'est envoyée à un serveur externe.
 
 ### Étapes
 
+Le dossier `android/` est déjà généré et configuré (permission Internet,
+autorisation du HTTP local vers le routeur via
+`network_security_config.xml`). Il n'y a **rien à modifier à la main** :
+
 ```bash
-# 1. Se placer dans le dossier du projet
+# 1. Récupérer le projet
+git clone https://github.com/HAMZA-HNA/Mon-d-p-t-.git orange-wifi
 cd orange-wifi
+git checkout claude/orange-router-wifi-control-ti6hgi
 
-# 2. Générer les dossiers de plateforme (android/, ios/…) autour du code
-flutter create .
-
-# 3. Installer les dépendances
+# 2. Installer les dépendances
 flutter pub get
 
-# 4. Brancher ton téléphone (mode développeur + débogage USB activé) puis :
+# 3. Brancher ton téléphone (mode développeur + débogage USB activé) puis :
 flutter run
 ```
 
-> `flutter create .` ne touche pas au dossier `lib/` ni au `pubspec.yaml`
-> existants : il ajoute seulement le code natif des plateformes.
+Pour produire un APK installable à partager :
 
-### Étape indispensable : autoriser le HTTP local (Android)
-
-Depuis Android 9, le trafic HTTP **non chiffré** est bloqué par défaut. Comme le
-routeur n'expose que `http://`, il faut l'autoriser pour les adresses locales.
-
-Le fichier est déjà fourni :
-`android/app/src/main/res/xml/network_security_config.xml`.
-
-Il faut juste le référencer dans le manifeste. Ouvre
-`android/app/src/main/AndroidManifest.xml` et, dans la balise `<application …>`,
-ajoute l'attribut `android:networkSecurityConfig` :
-
-```xml
-<application
-    android:label="orange_wifi_control"
-    android:networkSecurityConfig="@xml/network_security_config"
-    ... >
-```
-
-La permission Internet est aussi requise (Flutter l'ajoute en debug, mais
-pour une version release, ajoute avant la balise `<application>`) :
-
-```xml
-<uses-permission android:name="android.permission.INTERNET"/>
+```bash
+flutter build apk --release
+# Résultat : build/app/outputs/flutter-apk/app-release.apk
 ```
 
 ### Note iOS
