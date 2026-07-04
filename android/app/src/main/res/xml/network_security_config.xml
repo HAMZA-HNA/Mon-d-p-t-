@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Autorise le trafic HTTP en clair (cleartext) UNIQUEMENT vers les adresses de
+  routeurs locaux. Depuis Android 9 (API 28), le HTTP non-chiffré est bloqué
+  par défaut : sans ce fichier, l'app ne pourrait pas parler au routeur qui
+  n'utilise que http:// sur le réseau local.
+
+  On limite l'exception aux plages d'IP privées habituelles des box, on
+  n'ouvre donc PAS tout le trafic en clair de l'app.
+-->
+<network-security-config>
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="true">192.168.1.1</domain>
+        <domain includeSubdomains="true">192.168.0.1</domain>
+        <domain includeSubdomains="true">192.168.100.1</domain>
+        <domain includeSubdomains="true">192.168.8.1</domain>
+        <domain includeSubdomains="true">10.0.0.1</domain>
+    </domain-config>
+</network-security-config>

@@ -1,0 +1,26 @@
+name: orange_wifi_control
+description: >-
+  Application mobile pour voir les appareils connectés à ton WiFi (routeur
+  Orange Maroc / ZTE) et bloquer l'accès aux appareils non autorisés.
+publish_to: "none"
+version: 1.0.0+1
+
+environment:
+  sdk: ">=3.4.0 <4.0.0"
+  flutter: ">=3.22.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  http: ^1.2.2
+  provider: ^6.1.2
+  flutter_secure_storage: ^9.2.2
+  crypto: ^3.0.5
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^4.0.0
+
+flutter:
+  uses-material-design: true
