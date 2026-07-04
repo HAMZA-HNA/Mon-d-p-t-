@@ -20,11 +20,6 @@ class ZteEndpoints {
   const ZteEndpoints({
     this.loginPath = '/',
     this.logoutPath = '/?_type=loginData&_tag=logout&_=0',
-    this.loginTokenPaths = const [
-      // Firmwares récents (F6600P, F670L) : le token est servi par un endpoint
-      // Lua dédié. Ancien firmware : il est dans le HTML de la page de login.
-      '/function_module/login_module/login_page/logintoken_lua.lua',
-    ],
     this.deviceListPaths = const [
       '/getpage.gch?pid=1002&nextpage=net_dhcp_dynamic_t.gch',
       '/getpage.gch?pid=1002&nextpage=Localnet_LANDevice_t.gch',
@@ -37,7 +32,6 @@ class ZteEndpoints {
 
   final String loginPath;
   final String logoutPath;
-  final List<String> loginTokenPaths;
   final List<String> deviceListPaths;
   final String macFilterPath;
 }
@@ -145,22 +139,32 @@ class ZteRouterClient implements RouterClient {
 
     // 1. Détecte le bon schéma (HTTPS puis HTTP, ou l'inverse) en chargeant la
     //    page de login.
-    final loginPage = await _detectSchemeAndFetchLogin();
+    await _detectSchemeAndFetchLogin();
 
-    // 2. Récupère le token anti-rejeu (endpoint Lua récent, sinon dans le HTML).
-    final token = await _obtainLoginToken(loginPage);
-    _diag.add('token=${token ?? "(aucun)"}');
+    // Variantes de hachage du mot de passe rencontrées selon le firmware ZTE.
+    // Le token étant souvent à usage unique, on le re-récupère avant CHAQUE
+    // tentative (sinon les essais suivants échouent avec un token périmé).
+    final schemes = <String, String Function(String pw, String token)>{
+      // Firmwares récents (F6600P/F670L) : double SHA256, sel = token.
+      'sha(sha(pw)+tok)': (pw, tok) => _sha(_sha(pw) + tok),
+      // Ancienne variante : SHA256(mot_de_passe + token).
+      'sha(pw+tok)': (pw, tok) => _sha(pw + tok),
+      // Sans token.
+      'sha(pw)': (pw, tok) => _sha(pw),
+      'plain': (pw, tok) => pw,
+    };
 
-    // 3. Essaie les variantes de hachage connues des firmwares ZTE.
-    final candidates = <String>[
-      if (token != null)
-        sha256.convert(utf8.encode('$password$token')).toString(),
-      sha256.convert(utf8.encode(password)).toString(),
-      password,
-    ];
-
-    for (final candidate in candidates) {
-      if (await _attemptLogin(username, candidate, token)) return;
+    for (final entry in schemes.entries) {
+      String pageBody;
+      try {
+        pageBody = (await _get(endpoints.loginPath)).body;
+      } catch (_) {
+        continue;
+      }
+      final token = _extractToken(pageBody);
+      final hashed = entry.value(password, token ?? '');
+      _diag.add('try ${entry.key} tok=${token ?? "∅"}');
+      if (await _attemptLogin(username, hashed, token)) return;
     }
 
     throw RouterException(
@@ -213,45 +217,29 @@ class ZteRouterClient implements RouterClient {
     );
   }
 
-  /// Récupère le token de login : d'abord via les endpoints Lua dédiés, sinon
-  /// en le lisant dans le HTML de la page de login.
-  Future<String?> _obtainLoginToken(String loginPageHtml) async {
-    for (final path in endpoints.loginTokenPaths) {
-      try {
-        final r = await _get(path);
-        _diag.add('lua:${r.statusCode}"${_snippet(r.body, 70)}"');
-        final t = _extractToken(r.body);
-        if (t != null) return t;
-      } catch (_) {
-        _diag.add('lua:err');
-      }
-    }
-    return _extractToken(loginPageHtml);
-  }
+  String _sha(String s) => sha256.convert(utf8.encode(s)).toString();
 
-  /// Extrait un jeton de login sous ses différents noms/formats connus.
+  /// Extrait la valeur numérique de l'input caché `Frm_Logintoken` de la page
+  /// de login ZTE. Gère les deux ordres d'attributs (id avant/après value).
   String? _extractToken(String text) {
-    const names = [
-      'Frm_Logintoken',
-      '_sessionTOKEN',
-      'sessionTOKEN',
-      'getServerToken',
-      'lgToken',
-      'lgtoken',
-      'login_token',
-      'LoginToken',
-      'RandCount',
-      'token',
-    ];
-    for (final name in names) {
-      final re = RegExp(
-        name + r'''["']?\s*(?:value\s*=\s*)?["'>:=\s]+["']?([0-9A-Za-z]{4,})''',
-        caseSensitive: false,
-      );
-      final m = re.firstMatch(text);
-      if (m != null) return m.group(1);
-    }
-    return null;
+    // Cas courant : <input ... name/id="Frm_Logintoken" ... value="12345">
+    final m1 = RegExp(
+      'Frm_Logintoken[^>]{0,160}?value\\s*=\\s*["\']?(\\d{3,})',
+      caseSensitive: false,
+    ).firstMatch(text);
+    if (m1 != null) return m1.group(1);
+    // Cas inversé : value="12345" ... Frm_Logintoken
+    final m2 = RegExp(
+      'value\\s*=\\s*["\']?(\\d{3,})["\']?[^>]{0,160}?Frm_Logintoken',
+      caseSensitive: false,
+    ).firstMatch(text);
+    if (m2 != null) return m2.group(1);
+    // Cas JS : Frm_Logintoken = "12345" ou 'lgToken':'12345'
+    final m3 = RegExp(
+      '(?:Frm_Logintoken|lgToken|sessionTOKEN)["\']?\\s*[:=]\\s*["\']?(\\d{3,})',
+      caseSensitive: false,
+    ).firstMatch(text);
+    return m3?.group(1);
   }
 
   /// Raccourcit un texte pour l'affichage de diagnostic (une seule ligne).
@@ -277,18 +265,12 @@ class ZteRouterClient implements RouterClient {
       _diag.add('post:err');
       return false;
     }
+    // Après un login réussi, le routeur ne renvoie plus la page de login
+    // (qui contient Frm_Logintoken). C'est notre signal le plus fiable.
+    final stillLoginPage = res.body.contains('Frm_Logintoken');
     _diag.add('login:${res.statusCode} ck[${_cookies.keys.join(",")}] '
-        '"${_snippet(res.body, 90)}"');
-
-    final gotSession =
-        _cookies.keys.any((k) => k.toUpperCase() == 'SID') ||
-            _cookies.containsKey('_sessionid');
-    final stillLogin =
-        res.body.contains('Frm_Logintoken') || res.body.contains('loginData');
-    final redirected =
-        res.body.contains('logout') || res.body.contains('top.location');
-
-    return (gotSession || redirected) && !stillLogin;
+        'loginPage=$stillLoginPage "${_snippet(res.body, 70)}"');
+    return res.statusCode < 400 && !stillLoginPage;
   }
 
   @override
