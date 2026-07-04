@@ -157,6 +157,7 @@ class ZteRouterClient implements RouterClient {
       'plain': (pw, tok) => pw,
     };
 
+    var dumpedContext = false;
     for (final entry in schemes.entries) {
       String pageBody;
       try {
@@ -165,6 +166,13 @@ class ZteRouterClient implements RouterClient {
         continue;
       }
       final token = _extractToken(pageBody);
+      // Si on ne trouve pas le jeton, on affiche une fois le texte brut autour
+      // des mots-clés pour voir dans quel format le firmware le fournit.
+      if (token == null && !dumpedContext) {
+        dumpedContext = true;
+        _diag.add('CTX Frm_Logintoken=«${_context(pageBody, "Frm_Logintoken", 110)}»');
+        _diag.add('CTX sessionTOKEN=«${_context(pageBody, "sessionTOKEN", 90)}»');
+      }
       final hashed = entry.value(password, token ?? '');
       _diag.add('try ${entry.key} tok=${token ?? "∅"}');
       if (await _attemptLogin(username, hashed, token)) return;
@@ -221,6 +229,16 @@ class ZteRouterClient implements RouterClient {
   }
 
   String _sha(String s) => sha256.convert(utf8.encode(s)).toString();
+
+  /// Renvoie le texte autour de la première occurrence (insensible à la casse)
+  /// de [keyword], pour diagnostiquer le format d'un jeton dans la page.
+  String _context(String text, String keyword, int span) {
+    final i = text.toLowerCase().indexOf(keyword.toLowerCase());
+    if (i < 0) return 'absent';
+    final s = (i - 15).clamp(0, text.length).toInt();
+    final e = (i + span).clamp(0, text.length).toInt();
+    return text.substring(s, e).replaceAll(RegExp(r'\s+'), ' ').trim();
+  }
 
   /// Extrait la valeur numérique de l'input caché `Frm_Logintoken` de la page
   /// de login ZTE. Gère les deux ordres d'attributs (id avant/après value).
