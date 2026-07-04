@@ -184,7 +184,17 @@ class ZteRouterClient implements RouterClient {
             .get(Uri.parse('$scheme://$host${endpoints.loginPath}'))
             .timeout(_timeout);
         _absorbCookies(res);
-        _diag.add('$scheme:${res.statusCode}');
+        final kw = [
+          'Frm_Logintoken',
+          'logintoken',
+          'lgToken',
+          'sessionTOKEN',
+          'getServerToken',
+          'RandCount',
+          '_sessionid'
+        ].where((k) => res.body.toLowerCase().contains(k.toLowerCase())).toList();
+        _diag.add('$scheme:${res.statusCode} page=${res.body.length}b '
+            'kw[${kw.join(",")}]');
         return res.body;
       } on TimeoutException {
         lastError = 'timeout($scheme)';
@@ -208,29 +218,46 @@ class ZteRouterClient implements RouterClient {
   Future<String?> _obtainLoginToken(String loginPageHtml) async {
     for (final path in endpoints.loginTokenPaths) {
       try {
-        final body = (await _get(path)).body;
-        final t = _extractToken(body);
+        final r = await _get(path);
+        _diag.add('lua:${r.statusCode}"${_snippet(r.body, 70)}"');
+        final t = _extractToken(r.body);
         if (t != null) return t;
       } catch (_) {
-        // endpoint absent sur ce firmware, on continue
+        _diag.add('lua:err');
       }
     }
     return _extractToken(loginPageHtml);
   }
 
+  /// Extrait un jeton de login sous ses différents noms/formats connus.
   String? _extractToken(String text) {
-    // Cas HTML : <input ... id="Frm_Logintoken" value="12345">
-    final m = RegExp(
-      r'''Frm_Logintoken["']?[^>]*value\s*=\s*["']?(\d+)''',
-      caseSensitive: false,
-    ).firstMatch(text);
-    if (m != null) return m.group(1);
-    // Cas Lua/JSON : {"lgtoken":"12345"} ou Frm_Logintoken:12345
-    final m2 = RegExp(
-      r'''(?:lgtoken|Frm_Logintoken|token)["']?\s*[:=]\s*["']?(\d+)''',
-      caseSensitive: false,
-    ).firstMatch(text);
-    return m2?.group(1);
+    const names = [
+      'Frm_Logintoken',
+      '_sessionTOKEN',
+      'sessionTOKEN',
+      'getServerToken',
+      'lgToken',
+      'lgtoken',
+      'login_token',
+      'LoginToken',
+      'RandCount',
+      'token',
+    ];
+    for (final name in names) {
+      final re = RegExp(
+        name + r'''["']?\s*(?:value\s*=\s*)?["'>:=\s]+["']?([0-9A-Za-z]{4,})''',
+        caseSensitive: false,
+      );
+      final m = re.firstMatch(text);
+      if (m != null) return m.group(1);
+    }
+    return null;
+  }
+
+  /// Raccourcit un texte pour l'affichage de diagnostic (une seule ligne).
+  String _snippet(String s, [int n = 120]) {
+    final clean = s.replaceAll(RegExp(r'\s+'), ' ').trim();
+    return clean.length <= n ? clean : '${clean.substring(0, n)}…';
   }
 
   Future<bool> _attemptLogin(
@@ -250,7 +277,8 @@ class ZteRouterClient implements RouterClient {
       _diag.add('post:err');
       return false;
     }
-    _diag.add('login:${res.statusCode}');
+    _diag.add('login:${res.statusCode} ck[${_cookies.keys.join(",")}] '
+        '"${_snippet(res.body, 90)}"');
 
     final gotSession =
         _cookies.keys.any((k) => k.toUpperCase() == 'SID') ||
