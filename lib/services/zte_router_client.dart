@@ -69,6 +69,9 @@ class ZteRouterClient implements RouterClient {
   /// Cookies de session, sous forme `nom=valeur`.
   final Map<String, String> _cookies = {};
 
+  /// Dernier diagnostic de recherche des appareils (pages explorées).
+  String lastFetchDiag = '';
+
   /// Traces de diagnostic, jointes aux messages d'erreur pour aider au débogage.
   final List<String> _diag = [];
 
@@ -242,12 +245,6 @@ class ZteRouterClient implements RouterClient {
     return m3?.group(1);
   }
 
-  /// Raccourcit un texte pour l'affichage de diagnostic (une seule ligne).
-  String _snippet(String s, [int n = 120]) {
-    final clean = s.replaceAll(RegExp(r'\s+'), ' ').trim();
-    return clean.length <= n ? clean : '${clean.substring(0, n)}…';
-  }
-
   Future<bool> _attemptLogin(
       String username, String password, String? token) async {
     final randomNum = (Random().nextDouble() * 1e8).floor().toString();
@@ -265,12 +262,24 @@ class ZteRouterClient implements RouterClient {
       _diag.add('post:err');
       return false;
     }
-    // Après un login réussi, le routeur ne renvoie plus la page de login
-    // (qui contient Frm_Logintoken). C'est notre signal le plus fiable.
-    final stillLoginPage = res.body.contains('Frm_Logintoken');
+    // Détection de succès : la réponse ne doit plus être le formulaire de
+    // login, ET doit soit contenir un marqueur de page authentifiée, soit être
+    // une redirection vers l'accueil.
+    final b = res.body.toLowerCase();
+    final isLoginForm = b.contains('frm_logintoken') || b.contains('frm_username');
+    final hasAuthMarker = b.contains('logout') ||
+        b.contains('deconnexion') ||
+        b.contains('topologie') ||
+        b.contains('menuview') ||
+        b.contains('gestion et diagnostic');
+    final isRedirect = res.statusCode == 301 ||
+        res.statusCode == 302 ||
+        b.contains('top.location') ||
+        b.contains('window.location');
+    final ok = res.statusCode < 400 && !isLoginForm && (hasAuthMarker || isRedirect);
     _diag.add('login:${res.statusCode} ck[${_cookies.keys.join(",")}] '
-        'loginPage=$stillLoginPage "${_snippet(res.body, 70)}"');
-    return res.statusCode < 400 && !stillLoginPage;
+        'form=$isLoginForm auth=$hasAuthMarker rdr=$isRedirect ok=$ok');
+    return ok;
   }
 
   @override
@@ -285,25 +294,92 @@ class ZteRouterClient implements RouterClient {
   // Liste des appareils
   // ---------------------------------------------------------------------------
 
+  /// Explore l'interface du routeur pour trouver la page qui liste les
+  /// appareils. Plutôt que de deviner l'URL exacte (elle varie selon le
+  /// firmware Orange), on part de la racine et on suit les liens/frames en
+  /// cherchant la page contenant le plus d'adresses MAC.
   @override
   Future<List<NetworkDevice>> fetchDevices() async {
+    final diag = <String>[];
     final blockedMacs = await _fetchBlockedMacs();
 
-    for (final path in endpoints.deviceListPaths) {
-      String bodyText;
+    final visited = <String>{};
+    final queue = <String>['/', ...endpoints.deviceListPaths];
+    List<NetworkDevice> best = [];
+    var fetches = 0;
+
+    while (queue.isNotEmpty && fetches < 15) {
+      final path = queue.removeAt(0);
+      if (!visited.add(path) || _isUnsafeLink(path)) continue;
+
+      http.Response r;
       try {
-        bodyText = (await _get(path)).body;
+        r = await _get(path);
       } catch (_) {
+        diag.add('${_short(path)}:err');
         continue;
       }
-      final devices = _parseDevices(bodyText, blockedMacs);
-      if (devices.isNotEmpty) return devices;
+      fetches++;
+
+      final devices = _parseDevices(r.body, blockedMacs);
+      final active = devices.where((d) => !d.isBlocked).length;
+      diag.add('${_short(path)}:${r.statusCode}:${active}d');
+      if (devices.length > best.length) best = devices;
+
+      // Assez d'appareils trouvés : inutile de continuer à explorer.
+      if (active >= 2) break;
+
+      for (final u in _discoverLinks(r.body)) {
+        if (!visited.contains(u)) queue.add(u);
+      }
     }
 
-    return blockedMacs
-        .map((m) => NetworkDevice(mac: m, isBlocked: true, isOnline: false))
-        .toList();
+    lastFetchDiag = diag.join(' | ');
+
+    final map = {for (final d in best) d.mac: d};
+    for (final m in blockedMacs) {
+      map.putIfAbsent(
+          m, () => NetworkDevice(mac: m, isBlocked: true, isOnline: false));
+    }
+    return map.values.toList();
   }
+
+  /// Liens/frames à explorer, extraits d'une page HTML (chemins internes
+  /// pointant vers des pages `.gch` / `.lua` / `.html` / `.asp`).
+  Iterable<String> _discoverLinks(String html) {
+    final found = <String>{};
+    final re = RegExp(
+      '''(?:src|href|url|location)\\s*[=:]\\s*["']?([^"'\\s>()]+\\.(?:gch|lua|html?|asp)(?:\\?[^"'\\s>()]*)?)''',
+      caseSensitive: false,
+    );
+    final re2 = RegExp('''getpage\\.gch\\?[^"'\\s>()]+''', caseSensitive: false);
+    for (final m in [
+      ...re.allMatches(html).map((m) => m.group(1)!),
+      ...re2.allMatches(html).map((m) => m.group(0)),
+    ]) {
+      var u = m!.trim();
+      if (u.startsWith('http') || u.startsWith('//')) continue; // externe
+      if (!u.startsWith('/')) u = '/$u';
+      if (!_isUnsafeLink(u)) found.add(u);
+    }
+    return found;
+  }
+
+  /// Évite d'explorer les liens destructeurs (déconnexion, reboot, reset...)
+  /// qui casseraient la session ou la config.
+  bool _isUnsafeLink(String path) {
+    final p = path.toLowerCase();
+    return p.contains('logout') ||
+        p.contains('logoff') ||
+        p.contains('reboot') ||
+        p.contains('restart') ||
+        p.contains('reset') ||
+        p.contains('restore') ||
+        p.contains('save');
+  }
+
+  String _short(String path) =>
+      path.length <= 34 ? path : '…${path.substring(path.length - 33)}';
 
   List<NetworkDevice> _parseDevices(String text, Set<String> blocked) {
     final macRe = RegExp(r'([0-9A-Fa-f]{2}(?::[0-9A-Fa-f]{2}){5})');

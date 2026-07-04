@@ -97,7 +97,14 @@ class RouterController extends ChangeNotifier {
         ..sort((a, b) => a.displayName
             .toLowerCase()
             .compareTo(b.displayName.toLowerCase()));
-      _errorMessage = null;
+      if (activeDevices.isEmpty && client is ZteRouterClient) {
+        final diag = client.lastFetchDiag;
+        _errorMessage = diag.isEmpty
+            ? null
+            : 'Aucun appareil trouvé. Pages explorées : $diag';
+      } else {
+        _errorMessage = null;
+      }
     } on RouterException catch (e) {
       _errorMessage = e.message;
     } catch (e) {
