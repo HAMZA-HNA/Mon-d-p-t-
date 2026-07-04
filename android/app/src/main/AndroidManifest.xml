@@ -2,7 +2,7 @@
     <!-- Nécessaire pour parler au routeur sur le réseau local. -->
     <uses-permission android:name="android.permission.INTERNET"/>
     <application
-        android:label="WiFi Control"
+        android:label="Mon WiFi"
         android:name="${applicationName}"
         android:networkSecurityConfig="@xml/network_security_config"
         android:icon="@mipmap/ic_launcher">

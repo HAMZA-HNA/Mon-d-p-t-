@@ -5,6 +5,9 @@ Application mobile **Flutter** qui intègre l'interface de ton routeur Orange
 
 - 📋 **Voir** les appareils connectés à ton WiFi.
 - 🚫 **Bloquer** l'accès des appareils non autorisés.
+- 🔐 **Connexion automatique** : l'app remplit l'utilisateur et le mot de passe.
+- ⭐ **Raccourcis** vers tes pages préférées (appareils, blocage…).
+- 🔄 **Tirer pour rafraîchir** et écran d'aide si le WiFi n'est pas joignable.
 
 L'app affiche la **vraie interface de ton routeur** (celle accessible sur
 `https://192.168.11.1`) dans une WebView. Elle accepte automatiquement le
