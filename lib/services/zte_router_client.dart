@@ -1,73 +1,92 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
+import 'dart:math';
 
 import 'package:crypto/crypto.dart';
 import 'package:http/http.dart' as http;
+import 'package:http/io_client.dart';
 
 import '../models/network_device.dart';
 import 'router_client.dart';
 
 /// Points d'entrée (URLs / champs) de l'interface web ZTE.
 ///
-/// ⚠️ IMPORTANT : les firmwares ZTE (ZXHN F660, F670, F668, H168N...) diffèrent.
-/// Les valeurs ci-dessous couvrent les cas les plus courants chez Orange Maroc,
-/// mais tu devras peut-être les ajuster pour TON modèle. Comment les trouver :
-///
-///   1. Connecte-toi à http://192.168.1.1 depuis un PC (Chrome/Firefox).
-///   2. Ouvre les outils développeur (touche F12) → onglet "Network"/"Réseau".
-///   3. Va sur la page qui liste les appareils connectés, et sur la page de
-///      filtrage MAC. Regarde les requêtes (URL + champs POST) qui partent.
-///   4. Recopie les bons chemins ici.
-///
-/// Tout est centralisé dans cette classe pour n'avoir qu'un seul endroit à
-/// modifier.
+/// ⚠️ Les firmwares ZTE (ZXHN F660, F670, F6600P, H168N...) diffèrent.
+/// Les valeurs ci-dessous couvrent les cas les plus courants. Pour trouver
+/// celles de TON modèle : PC → http(s)://<routeur> → F12 → onglet Network →
+/// observe les requêtes lors du login / de l'affichage des appareils.
 class ZteEndpoints {
   const ZteEndpoints({
     this.loginPath = '/',
     this.logoutPath = '/?_type=loginData&_tag=logout&_=0',
+    this.loginTokenPaths = const [
+      // Firmwares récents (F6600P, F670L) : le token est servi par un endpoint
+      // Lua dédié. Ancien firmware : il est dans le HTML de la page de login.
+      '/function_module/login_module/login_page/logintoken_lua.lua',
+    ],
     this.deviceListPaths = const [
-      // Plusieurs chemins possibles selon le firmware : on essaie chacun
-      // jusqu'à en trouver un qui renvoie des adresses MAC.
       '/getpage.gch?pid=1002&nextpage=net_dhcp_dynamic_t.gch',
       '/getpage.gch?pid=1002&nextpage=Localnet_LANDevice_t.gch',
       '/getpage.gch?pid=1002&nextpage=access_dev_t.gch',
       '/common_page/lanMgrList_lua.lua',
+      '/?_type=menuData&_tag=localNetStatus_lua.lua',
     ],
     this.macFilterPath = '/getpage.gch?pid=1002&nextpage=access_mac_filter_t.gch',
   });
 
   final String loginPath;
   final String logoutPath;
+  final List<String> loginTokenPaths;
   final List<String> deviceListPaths;
   final String macFilterPath;
 }
 
 /// Client pour les routeurs ZTE (interface web ZXHN).
 ///
-/// Le package `http` ne gère pas les cookies : on maintient donc la session
-/// manuellement (le routeur renvoie un cookie `SID` après le login).
+/// Deux particularités gérées ici :
+///  - Le routeur sert souvent son interface en **HTTPS avec un certificat
+///    auto-signé** : on l'accepte (c'est un équipement local possédé par
+///    l'utilisateur), sinon la connexion échoue avec CERTIFICATE_VERIFY_FAILED.
+///  - Le package `http` ne gère pas les cookies : on maintient la session
+///    manuellement (cookie `SID` posé après le login).
 class ZteRouterClient implements RouterClient {
   ZteRouterClient({
     required this.host,
-    this.useHttps = false,
+    this.preferHttps = true,
     this.endpoints = const ZteEndpoints(),
     http.Client? httpClient,
     Duration? timeout,
-  })  : _http = httpClient ?? http.Client(),
+  })  : _http = httpClient ?? _createTlsTolerantClient(),
         _timeout = timeout ?? const Duration(seconds: 12);
 
   @override
   final String host;
 
-  final bool useHttps;
+  /// Essaie HTTPS d'abord (cas des F6600P / firmwares récents).
+  final bool preferHttps;
   final ZteEndpoints endpoints;
   final http.Client _http;
   final Duration _timeout;
 
+  /// Schéma retenu après détection (`https` ou `http`).
+  String _scheme = 'https';
+
   /// Cookies de session, sous forme `nom=valeur`.
   final Map<String, String> _cookies = {};
 
-  String get _scheme => useHttps ? 'https' : 'http';
+  /// Traces de diagnostic, jointes aux messages d'erreur pour aider au débogage.
+  final List<String> _diag = [];
+
+  /// Client HTTP qui accepte le certificat auto-signé du routeur local.
+  static http.Client _createTlsTolerantClient() {
+    final io = HttpClient();
+    io.connectionTimeout = const Duration(seconds: 12);
+    io.badCertificateCallback =
+        (X509Certificate cert, String host, int port) => true;
+    return IOClient(io);
+  }
+
   Uri _uri(String path) => Uri.parse('$_scheme://$host$path');
 
   String get _cookieHeader =>
@@ -76,7 +95,6 @@ class ZteRouterClient implements RouterClient {
   void _absorbCookies(http.Response res) {
     final raw = res.headers['set-cookie'];
     if (raw == null) return;
-    // Découpe naïve mais suffisante : "SID=abc; Path=/, OTHER=xyz; Path=/"
     for (final chunk in raw.split(RegExp(r',(?=[^ ]+=)'))) {
       final first = chunk.split(';').first.trim();
       final eq = first.indexOf('=');
@@ -88,7 +106,10 @@ class ZteRouterClient implements RouterClient {
 
   Future<http.Response> _get(String path) async {
     final res = await _http
-        .get(_uri(path), headers: {'Cookie': _cookieHeader})
+        .get(_uri(path), headers: {
+          'Cookie': _cookieHeader,
+          'Referer': '$_scheme://$host/',
+        })
         .timeout(_timeout);
     _absorbCookies(res);
     return res;
@@ -101,6 +122,7 @@ class ZteRouterClient implements RouterClient {
           headers: {
             'Cookie': _cookieHeader,
             'Content-Type': 'application/x-www-form-urlencoded',
+            'Referer': '$_scheme://$host/',
           },
           body: body,
         )
@@ -118,78 +140,134 @@ class ZteRouterClient implements RouterClient {
     required String username,
     required String password,
   }) async {
-    http.Response page;
-    try {
-      page = await _get(endpoints.loginPath);
-    } on TimeoutException {
-      throw RouterException(
-          "Pas de réponse du routeur ($host). Vérifie que ton téléphone est "
-          "bien connecté au WiFi et que l'adresse IP est correcte.");
-    } catch (e) {
-      throw RouterException("Impossible de joindre le routeur : $e");
-    }
+    _diag.clear();
+    _cookies.clear();
 
-    // Le token anti-rejeu change à chaque affichage de la page de login.
-    final token = _extractLoginToken(page.body);
+    // 1. Détecte le bon schéma (HTTPS puis HTTP, ou l'inverse) en chargeant la
+    //    page de login.
+    final loginPage = await _detectSchemeAndFetchLogin();
 
-    // La plupart des firmwares ZXHN attendent SHA256(motDePasse + token).
-    // Certains attendent SHA256(motDePasse) seul : on tente les deux.
-    final hashedWithToken =
-        sha256.convert(utf8.encode('$password${token ?? ''}')).toString();
-    final hashedPlain = sha256.convert(utf8.encode(password)).toString();
+    // 2. Récupère le token anti-rejeu (endpoint Lua récent, sinon dans le HTML).
+    final token = await _obtainLoginToken(loginPage);
+    _diag.add('token=${token ?? "(aucun)"}');
 
-    for (final candidate in [hashedWithToken, hashedPlain, password]) {
-      final ok = await _attemptLogin(username, candidate, token);
-      if (ok) return;
+    // 3. Essaie les variantes de hachage connues des firmwares ZTE.
+    final candidates = <String>[
+      if (token != null)
+        sha256.convert(utf8.encode('$password$token')).toString(),
+      sha256.convert(utf8.encode(password)).toString(),
+      password,
+    ];
+
+    for (final candidate in candidates) {
+      if (await _attemptLogin(username, candidate, token)) return;
     }
 
     throw RouterException(
-        "Login refusé. Vérifie l'utilisateur et le mot de passe (souvent sur "
-        "l'étiquette derrière le routeur). Si un seul appareil peut être "
-        "connecté à l'admin à la fois, déconnecte les autres.");
+      "Login refusé par le routeur.\n\n"
+      "Vérifie l'utilisateur (souvent « user » ou « admin ») et le mot de "
+      "passe de l'étiquette. Si un seul appareil peut être connecté à l'admin "
+      "à la fois, déconnecte les autres sessions.\n\n"
+      "Diagnostic : ${_diag.join(' | ')}",
+    );
+  }
+
+  /// Charge la page de login en testant HTTPS puis HTTP (ordre selon
+  /// [preferHttps]). Mémorise le schéma qui marche.
+  Future<String> _detectSchemeAndFetchLogin() async {
+    final order = preferHttps ? ['https', 'http'] : ['http', 'https'];
+    Object? lastError;
+    for (final scheme in order) {
+      _scheme = scheme;
+      try {
+        final res = await _http
+            .get(Uri.parse('$scheme://$host${endpoints.loginPath}'))
+            .timeout(_timeout);
+        _absorbCookies(res);
+        _diag.add('$scheme:${res.statusCode}');
+        return res.body;
+      } on TimeoutException {
+        lastError = 'timeout($scheme)';
+        _diag.add('timeout($scheme)');
+      } catch (e) {
+        lastError = e;
+        _diag.add('$scheme:err');
+      }
+    }
+    throw RouterException(
+      "Impossible de joindre le routeur à l'adresse « $host ».\n\n"
+      "Vérifie que ton téléphone est bien connecté au WiFi de ce routeur et "
+      "que l'adresse est correcte (souvent 192.168.1.1 ou 192.168.11.1 — c'est "
+      "la « passerelle par défaut » de ta connexion WiFi).\n\n"
+      "Détail : $lastError",
+    );
+  }
+
+  /// Récupère le token de login : d'abord via les endpoints Lua dédiés, sinon
+  /// en le lisant dans le HTML de la page de login.
+  Future<String?> _obtainLoginToken(String loginPageHtml) async {
+    for (final path in endpoints.loginTokenPaths) {
+      try {
+        final body = (await _get(path)).body;
+        final t = _extractToken(body);
+        if (t != null) return t;
+      } catch (_) {
+        // endpoint absent sur ce firmware, on continue
+      }
+    }
+    return _extractToken(loginPageHtml);
+  }
+
+  String? _extractToken(String text) {
+    // Cas HTML : <input ... id="Frm_Logintoken" value="12345">
+    final m = RegExp(
+      r'''Frm_Logintoken["']?[^>]*value\s*=\s*["']?(\d+)''',
+      caseSensitive: false,
+    ).firstMatch(text);
+    if (m != null) return m.group(1);
+    // Cas Lua/JSON : {"lgtoken":"12345"} ou Frm_Logintoken:12345
+    final m2 = RegExp(
+      r'''(?:lgtoken|Frm_Logintoken|token)["']?\s*[:=]\s*["']?(\d+)''',
+      caseSensitive: false,
+    ).firstMatch(text);
+    return m2?.group(1);
   }
 
   Future<bool> _attemptLogin(
       String username, String password, String? token) async {
+    final randomNum = (Random().nextDouble() * 1e8).floor().toString();
     final body = {
       'action': 'login',
       'Username': username,
       'Password': password,
+      'UserRandomNum': randomNum,
       if (token != null) 'Frm_Logintoken': token,
     };
     http.Response res;
     try {
       res = await _post(endpoints.loginPath, body);
-    } catch (_) {
+    } catch (e) {
+      _diag.add('post:err');
       return false;
     }
-    // Succès typique : un cookie SID est posé, ou redirection hors login.
-    final gotSession =
-        _cookies.containsKey('SID') || _cookies.containsKey('sid');
-    final looksLikeLoginPage =
-        res.body.contains('Frm_Logintoken') || res.body.contains('loginData');
-    return gotSession && !looksLikeLoginPage;
-  }
+    _diag.add('login:${res.statusCode}');
 
-  String? _extractLoginToken(String html) {
-    final m = RegExp(
-      r'''Frm_Logintoken["']?\s*[^>]*value\s*=\s*["']?(\d+)''',
-      caseSensitive: false,
-    ).firstMatch(html);
-    if (m != null) return m.group(1);
-    // Variante : token défini en JavaScript.
-    final m2 = RegExp(r'''Frm_Logintoken["']?\s*[:=]\s*["']?(\d+)''')
-        .firstMatch(html);
-    return m2?.group(1);
+    final gotSession =
+        _cookies.keys.any((k) => k.toUpperCase() == 'SID') ||
+            _cookies.containsKey('_sessionid');
+    final stillLogin =
+        res.body.contains('Frm_Logintoken') || res.body.contains('loginData');
+    final redirected =
+        res.body.contains('logout') || res.body.contains('top.location');
+
+    return (gotSession || redirected) && !stillLogin;
   }
 
   @override
   Future<void> logout() async {
     try {
       await _get(endpoints.logoutPath);
-    } catch (_) {
-      // Best-effort.
-    }
+    } catch (_) {}
     _cookies.clear();
   }
 
@@ -212,18 +290,11 @@ class ZteRouterClient implements RouterClient {
       if (devices.isNotEmpty) return devices;
     }
 
-    // Aucun appareil trouvé : renvoie au moins la liste des MAC bloquées
-    // connues, pour que l'utilisateur puisse les débloquer.
     return blockedMacs
         .map((m) => NetworkDevice(mac: m, isBlocked: true, isOnline: false))
         .toList();
   }
 
-  /// Extrait les appareils d'une page HTML en repérant les adresses MAC et,
-  /// pour chacune, l'IP et le nom d'hôte les plus proches dans le texte.
-  ///
-  /// Cette approche par motif est volontairement tolérante : elle fonctionne
-  /// sur la plupart des mises en page ZTE sans dépendre d'une structure exacte.
   List<NetworkDevice> _parseDevices(String text, Set<String> blocked) {
     final macRe = RegExp(r'([0-9A-Fa-f]{2}(?::[0-9A-Fa-f]{2}){5})');
     final ipRe = RegExp(r'(\d{1,3}(?:\.\d{1,3}){3})');
@@ -233,7 +304,6 @@ class ZteRouterClient implements RouterClient {
       final mac = NetworkDevice.normalizeMac(match.group(1)!);
       if (mac.startsWith('00:00:00') || mac.startsWith('FF:FF:FF')) continue;
 
-      // Fenêtre de texte autour de la MAC pour deviner IP + hostname.
       final start = (match.start - 200).clamp(0, text.length).toInt();
       final end = (match.end + 200).clamp(0, text.length).toInt();
       final window = text.substring(start, end);
@@ -253,7 +323,6 @@ class ZteRouterClient implements RouterClient {
       );
     }
 
-    // Marque comme bloquées (et hors ligne) les MAC filtrées non revues ici.
     for (final m in blocked) {
       seen.putIfAbsent(
         m,
@@ -264,7 +333,6 @@ class ZteRouterClient implements RouterClient {
   }
 
   String? _guessHostname(String window) {
-    // Cherche des libellés courants "HostName", "DeviceName" suivis d'une valeur.
     final m = RegExp(
       r'''(?:HostName|DeviceName|Name)["'\s:=>]+([A-Za-z0-9_\-\.]{2,32})''',
       caseSensitive: false,
@@ -296,11 +364,6 @@ class ZteRouterClient implements RouterClient {
   @override
   Future<void> unblockDevice(String mac) => _setMacFilter(mac, block: false);
 
-  /// Ajoute/retire une MAC de la liste de filtrage (blocage) du routeur.
-  ///
-  /// ⚠️ Les champs POST du filtrage MAC varient beaucoup selon le firmware.
-  /// Ceux ci-dessous suivent le schéma `manager_dev_*` fréquent chez ZTE.
-  /// Ajuste-les avec les outils développeur du navigateur (voir [ZteEndpoints]).
   Future<void> _setMacFilter(String mac, {required bool block}) async {
     final normalized = NetworkDevice.normalizeMac(mac);
     final body = {
@@ -309,7 +372,7 @@ class ZteRouterClient implements RouterClient {
       'action': block ? 'add' : 'del',
       'MACAddress': normalized,
       'macAddr': normalized,
-      'AccessControl': '1', // 1 = interdire ; adapte selon ton firmware.
+      'AccessControl': '1',
       'Frm_Logintoken': '',
     };
     http.Response res;
@@ -323,8 +386,8 @@ class ZteRouterClient implements RouterClient {
     if (res.statusCode >= 400) {
       throw RouterException(
           "Le routeur a refusé le blocage (code ${res.statusCode}). Ton compte "
-          "n'a peut-être pas les droits de filtrage MAC (fréquent quand Orange "
-          "verrouille le compte super-admin).");
+          "n'a peut-être pas les droits de filtrage MAC (fréquent quand le "
+          "compte « user » d'Orange est limité).");
     }
   }
 }
