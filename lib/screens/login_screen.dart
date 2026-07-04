@@ -18,6 +18,22 @@ class _LoginScreenState extends State<LoginScreen> {
   bool _obscure = true;
 
   @override
+  void initState() {
+    super.initState();
+    // Re-remplit les champs avec les derniers identifiants saisis.
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      final saved = await context.read<RouterController>().loadSavedCredentials();
+      if (saved != null && mounted) {
+        setState(() {
+          _host.text = saved.host;
+          _user.text = saved.username;
+          _pass.text = saved.password;
+        });
+      }
+    });
+  }
+
+  @override
   void dispose() {
     _host.dispose();
     _user.dispose();

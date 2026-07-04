@@ -15,7 +15,7 @@ class OrangeWifiApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return ChangeNotifierProvider(
-      create: (_) => RouterController()..tryAutoLogin(),
+      create: (_) => RouterController(),
       child: MaterialApp(
         title: 'WiFi Control',
         debugShowCheckedModeBanner: false,

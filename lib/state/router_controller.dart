@@ -37,17 +37,8 @@ class RouterController extends ChangeNotifier {
   /// Ajouter un routeur = ajouter un `case` ici.
   RouterClient _buildClient(String host) => ZteRouterClient(host: host);
 
-  /// Tente de reconnecter avec des identifiants sauvegardés au démarrage.
-  Future<void> tryAutoLogin() async {
-    final saved = await _store.load();
-    if (saved == null) return;
-    await login(
-      host: saved.host,
-      username: saved.username,
-      password: saved.password,
-      remember: true,
-    );
-  }
+  /// Identifiants sauvegardés (pour re-remplir le formulaire de connexion).
+  Future<RouterCredentials?> loadSavedCredentials() => _store.load();
 
   Future<bool> login({
     required String host,
@@ -59,18 +50,21 @@ class RouterController extends ChangeNotifier {
     _errorMessage = null;
     notifyListeners();
 
+    // Mémorise tout de suite ce qui a été saisi, pour re-remplir les champs à
+    // la prochaine ouverture — même si la connexion échoue.
+    if (remember) {
+      await _store.save(RouterCredentials(
+        host: host.trim(),
+        username: username.trim(),
+        password: password,
+      ));
+    }
+
     final client = _buildClient(host.trim());
     try {
       await client.login(username: username.trim(), password: password);
       _client = client;
       _status = SessionStatus.loggedIn;
-      if (remember) {
-        await _store.save(RouterCredentials(
-          host: host.trim(),
-          username: username.trim(),
-          password: password,
-        ));
-      }
       notifyListeners();
       await refresh();
       return true;
