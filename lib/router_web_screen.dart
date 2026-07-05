@@ -213,8 +213,34 @@ class _RouterWebScreenState extends State<RouterWebScreen> {
     _loadUrl(_url); // recharge la page de login pour se connecter tout de suite
   }
 
+  /// Sur ce routeur, la page réelle est chargée dans un cadre (frame) : l'URL
+  /// du haut ne change pas. On récupère donc l'adresse la plus « profonde »
+  /// (celle du cadre de contenu) pour que le raccourci pointe sur la bonne page.
+  Future<String> _currentContentUrl() async {
+    const js = '''
+    (function(){
+      var best = window.location.href;
+      try {
+        for (var i=0; i<window.frames.length; i++){
+          try {
+            var u = window.frames[i].location.href;
+            if (u && u.indexOf('about:blank') < 0 && u.length > best.length) {
+              best = u;
+            }
+          } catch(e){}
+        }
+      } catch(e){}
+      return best;
+    })();
+    ''';
+    final r = await _controller?.evaluateJavascript(source: js);
+    var u = r?.toString() ?? _url;
+    if (u.isEmpty || u == 'null') u = _url;
+    return u;
+  }
+
   Future<void> _addBookmarkForCurrentPage() async {
-    final current = (await _controller?.getUrl())?.toString() ?? _url;
+    final current = await _currentContentUrl();
     final title = (await _controller?.getTitle()) ?? 'Raccourci';
     if (!mounted) return;
     final nameCtrl = TextEditingController(text: title);
