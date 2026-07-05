@@ -7,8 +7,9 @@ import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 import 'settings_store.dart';
 
 /// Écran principal : affiche l'interface web du routeur dans l'application,
-/// avec connexion automatique, raccourcis, tirer-pour-rafraîchir et un écran
-/// d'aide si le téléphone n'est pas connecté au bon WiFi.
+/// avec connexion automatique, tirer-pour-rafraîchir, un écran d'aide si le
+/// WiFi n'est pas joignable, et un bouton qui navigue vers la page de filtrage
+/// MAC (blocage) en rejouant les clics de menu.
 class RouterWebScreen extends StatefulWidget {
   const RouterWebScreen({super.key});
 
@@ -26,7 +27,6 @@ class _RouterWebScreenState extends State<RouterWebScreen> {
 
   String _url = _defaultUrl;
   (String, String)? _creds; // (utilisateur, mot de passe)
-  List<Bookmark> _bookmarks = [];
 
   bool _ready = false;
   bool _loadError = false;
@@ -46,11 +46,11 @@ class _RouterWebScreenState extends State<RouterWebScreen> {
   Future<void> _load() async {
     final url = await _store.loadUrl();
     final creds = await _store.loadCredentials();
-    final bm = await _store.loadBookmarks();
+    // Nettoie d'éventuels anciens raccourcis (fonction retirée).
+    await _store.saveBookmarks([]);
     setState(() {
       if (url != null && url.isNotEmpty) _url = url;
       _creds = creds;
-      _bookmarks = bm;
       _ready = true;
     });
   }
@@ -69,9 +69,6 @@ class _RouterWebScreenState extends State<RouterWebScreen> {
 
   // --- Connexion automatique -------------------------------------------------
 
-  /// JS injecté sur la page de login pour remplir (et éventuellement soumettre)
-  /// les identifiants. Best-effort : s'il n'y a pas de champ de login, ne fait
-  /// rien.
   String _autoFillJs(String user, String pass, bool submit) {
     final u = jsonEncode(user);
     final p = jsonEncode(pass);
@@ -95,7 +92,6 @@ class _RouterWebScreenState extends State<RouterWebScreen> {
                || document.querySelector('input[type="submit"]')
                || document.querySelector('button');
           if(b){ b.click(); return 'submitted'; }
-          return 'filled';
         }
         return 'filled';
       } catch(e){ return 'err'; }
@@ -112,6 +108,54 @@ class _RouterWebScreenState extends State<RouterWebScreen> {
     if (res != null && res.toString().contains('submitted')) {
       _autoSubmitted = true;
     }
+  }
+
+  // --- Aller à la page de blocage (rejoue les clics de menu) ------------------
+
+  /// Sur ce routeur, il n'y a pas d'adresse par page (interface AJAX). Pour un
+  /// « raccourci » vers le filtrage MAC, on clique par le texte des menus :
+  /// Internet → Sécurité → Critères de filtrage.
+  String get _gotoBlockingJs => '''
+    (function(){
+      function docs(){
+        var ds=[document];
+        try{ for(var i=0;i<window.frames.length;i++){ try{ ds.push(window.frames[i].document);}catch(e){} } }catch(e){}
+        return ds;
+      }
+      function clickText(txt){
+        var ds=docs();
+        for(var d=0; d<ds.length; d++){
+          var els=ds[d].querySelectorAll('a,span,td,div,li,button,label');
+          for(var i=0;i<els.length;i++){
+            var e=els[i];
+            var t=(e.textContent||'').replace(/\\s+/g,' ').trim();
+            if(t===txt){
+              var n=e;
+              for(var k=0;k<5 && n;k++){
+                if(n.tagName==='A'||n.onclick||n.getAttribute('onclick')){ n.click(); return true; }
+                n=n.parentElement;
+              }
+              e.click(); return true;
+            }
+          }
+        }
+        return false;
+      }
+      clickText('Internet');
+      setTimeout(function(){ clickText('Sécurité'); }, 900);
+      setTimeout(function(){ clickText('Critères de filtrage'); }, 2000);
+    })();
+  ''';
+
+  Future<void> _goToBlocking() async {
+    if (_controller == null) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('Ouverture de la page de filtrage MAC…'),
+        duration: Duration(seconds: 2),
+      ),
+    );
+    await _controller!.evaluateJavascript(source: _gotoBlockingJs);
   }
 
   // --- Dialogues -------------------------------------------------------------
@@ -210,83 +254,7 @@ class _RouterWebScreenState extends State<RouterWebScreen> {
       _creds = (userCtrl.text.trim(), passCtrl.text);
       _autoSubmitted = false;
     });
-    _loadUrl(_url); // recharge la page de login pour se connecter tout de suite
-  }
-
-  /// Sur ce routeur, la page réelle est chargée dans un cadre (frame) : l'URL
-  /// du haut ne change pas. On récupère donc l'adresse la plus « profonde »
-  /// (celle du cadre de contenu) pour que le raccourci pointe sur la bonne page.
-  Future<String> _currentContentUrl() async {
-    const js = '''
-    (function(){
-      var best = window.location.href;
-      try {
-        for (var i=0; i<window.frames.length; i++){
-          try {
-            var u = window.frames[i].location.href;
-            if (u && u.indexOf('about:blank') < 0 && u.length > best.length) {
-              best = u;
-            }
-          } catch(e){}
-        }
-      } catch(e){}
-      return best;
-    })();
-    ''';
-    final r = await _controller?.evaluateJavascript(source: js);
-    var u = r?.toString() ?? _url;
-    if (u.isEmpty || u == 'null') u = _url;
-    return u;
-  }
-
-  Future<void> _addBookmarkForCurrentPage() async {
-    final current = await _currentContentUrl();
-    final title = (await _controller?.getTitle()) ?? 'Raccourci';
-    if (!mounted) return;
-    final nameCtrl = TextEditingController(text: title);
-    final ok = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Ajouter un raccourci'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            TextField(
-              controller: nameCtrl,
-              autofocus: true,
-              decoration: const InputDecoration(
-                labelText: 'Nom du raccourci',
-                border: OutlineInputBorder(),
-              ),
-            ),
-            const SizedBox(height: 8),
-            Text(current,
-                style: const TextStyle(fontSize: 11, color: Colors.grey)),
-          ],
-        ),
-        actions: [
-          TextButton(
-              onPressed: () => Navigator.pop(ctx, false),
-              child: const Text('Annuler')),
-          FilledButton(
-              onPressed: () => Navigator.pop(ctx, true),
-              child: const Text('Ajouter')),
-        ],
-      ),
-    );
-    if (ok != true) return;
-    final updated = [
-      ..._bookmarks,
-      Bookmark(name: nameCtrl.text.trim().isEmpty ? 'Raccourci' : nameCtrl.text.trim(), url: current),
-    ];
-    await _store.saveBookmarks(updated);
-    setState(() => _bookmarks = updated);
-  }
-
-  Future<void> _removeBookmark(Bookmark b) async {
-    final updated = _bookmarks.where((x) => x.url != b.url || x.name != b.name).toList();
-    await _store.saveBookmarks(updated);
-    setState(() => _bookmarks = updated);
+    _loadUrl(_url);
   }
 
   // --- UI --------------------------------------------------------------------
@@ -327,20 +295,13 @@ class _RouterWebScreenState extends State<RouterWebScreen> {
             PopupMenuButton<String>(
               onSelected: (v) {
                 switch (v) {
-                  case 'bookmark':
-                    _addBookmarkForCurrentPage();
-                  case 'address':
-                    _changeAddress();
                   case 'creds':
                     _editCredentials();
+                  case 'address':
+                    _changeAddress();
                 }
               },
               itemBuilder: (_) => const [
-                PopupMenuItem(
-                    value: 'bookmark',
-                    child: ListTile(
-                        leading: Icon(Icons.star_border),
-                        title: Text('Ajouter un raccourci'))),
                 PopupMenuItem(
                     value: 'creds',
                     child: ListTile(
@@ -364,87 +325,53 @@ class _RouterWebScreenState extends State<RouterWebScreen> {
                 )
               : null,
         ),
-        body: Column(
+        body: Stack(
           children: [
-            if (_bookmarks.isNotEmpty) _shortcutsBar(),
-            Expanded(
-              child: Stack(
-                children: [
-                  InAppWebView(
-                    initialUrlRequest: URLRequest(url: WebUri(_url)),
-                    pullToRefreshController: _pullToRefresh,
-                    initialSettings: InAppWebViewSettings(
-                      javaScriptEnabled: true,
-                      useHybridComposition: true,
-                      mediaPlaybackRequiresUserGesture: false,
-                      mixedContentMode:
-                          MixedContentMode.MIXED_CONTENT_ALWAYS_ALLOW,
-                    ),
-                    onWebViewCreated: (c) => _controller = c,
-                    onProgressChanged: (c, p) =>
-                        setState(() => _progress = p / 100.0),
-                    onReceivedServerTrustAuthRequest: (c, challenge) async =>
-                        ServerTrustAuthResponse(
-                            action: ServerTrustAuthResponseAction.PROCEED),
-                    onLoadStop: (c, url) async {
-                      _pullToRefresh?.endRefreshing();
-                      setState(() => _loadError = false);
-                      await _tryAutoLogin(c);
-                    },
-                    onReceivedError: (c, request, error) {
-                      _pullToRefresh?.endRefreshing();
-                      if (request.isForMainFrame ?? false) {
-                        setState(() => _loadError = true);
-                      }
-                    },
-                  ),
-                  if (_loadError) _errorOverlay(),
-                ],
+            InAppWebView(
+              initialUrlRequest: URLRequest(url: WebUri(_url)),
+              pullToRefreshController: _pullToRefresh,
+              initialSettings: InAppWebViewSettings(
+                javaScriptEnabled: true,
+                useHybridComposition: true,
+                mediaPlaybackRequiresUserGesture: false,
+                mixedContentMode: MixedContentMode.MIXED_CONTENT_ALWAYS_ALLOW,
               ),
+              onWebViewCreated: (c) => _controller = c,
+              onProgressChanged: (c, p) =>
+                  setState(() => _progress = p / 100.0),
+              onReceivedServerTrustAuthRequest: (c, challenge) async =>
+                  ServerTrustAuthResponse(
+                      action: ServerTrustAuthResponseAction.PROCEED),
+              onLoadStop: (c, url) async {
+                _pullToRefresh?.endRefreshing();
+                setState(() => _loadError = false);
+                await _tryAutoLogin(c);
+              },
+              onReceivedError: (c, request, error) {
+                _pullToRefresh?.endRefreshing();
+                if (request.isForMainFrame ?? false) {
+                  setState(() => _loadError = true);
+                }
+              },
             ),
+            if (_loadError) _errorOverlay(),
           ],
         ),
-      ),
-    );
-  }
-
-  Widget _shortcutsBar() {
-    return Container(
-      height: 48,
-      color: _orange.withValues(alpha: 0.08),
-      child: ListView.separated(
-        scrollDirection: Axis.horizontal,
-        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
-        itemCount: _bookmarks.length,
-        separatorBuilder: (_, __) => const SizedBox(width: 6),
-        itemBuilder: (_, i) {
-          final b = _bookmarks[i];
-          return GestureDetector(
-            onLongPress: () async {
-              final del = await showDialog<bool>(
-                context: context,
-                builder: (ctx) => AlertDialog(
-                  title: Text('Supprimer « ${b.name} » ?'),
-                  actions: [
-                    TextButton(
-                        onPressed: () => Navigator.pop(ctx, false),
-                        child: const Text('Annuler')),
-                    FilledButton(
-                        onPressed: () => Navigator.pop(ctx, true),
-                        child: const Text('Supprimer')),
-                  ],
-                ),
-              );
-              if (del == true) _removeBookmark(b);
-            },
-            child: ActionChip(
-              avatar: const Icon(Icons.bolt, size: 18),
-              label: Text(b.name),
-              onPressed: () => _loadUrl(b.url),
-              tooltip: b.url,
+        bottomNavigationBar: SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(12, 6, 12, 10),
+            child: FilledButton.icon(
+              onPressed: _goToBlocking,
+              icon: const Icon(Icons.block),
+              label: const Text('Bloquer un appareil (Filtre MAC)'),
+              style: FilledButton.styleFrom(
+                backgroundColor: _orange,
+                foregroundColor: Colors.white,
+                minimumSize: const Size.fromHeight(48),
+              ),
             ),
-          );
-        },
+          ),
+        ),
       ),
     );
   }
