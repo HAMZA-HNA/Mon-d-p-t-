@@ -115,58 +115,113 @@ class _RouterWebScreenState extends State<RouterWebScreen> {
   /// Sur ce routeur, il n'y a pas d'adresse par page (interface AJAX). Pour un
   /// « raccourci » vers le filtrage MAC, on clique par le texte des menus :
   /// Internet → Sécurité → Critères de filtrage.
-  String get _gotoBlockingJs => '''
-    (function(){
-      function allDocs(win, acc){
-        try{ acc.push(win.document); }catch(e){}
-        try{ for(var i=0;i<win.frames.length;i++){ allDocs(win.frames[i], acc); } }catch(e){}
-        return acc;
-      }
-      function fire(el){
-        ['mouseover','mousedown','mouseup','click'].forEach(function(type){
-          try{ el.dispatchEvent(new MouseEvent(type,{bubbles:true,cancelable:true,view:window})); }catch(e){}
-        });
-      }
-      function clickText(txt){
-        var ds=allDocs(window, []);
-        for(var d=0; d<ds.length; d++){
-          var els;
-          try{ els=ds[d].querySelectorAll('a,span,td,div,li,button,label,p'); }catch(e){ continue; }
-          for(var i=0;i<els.length;i++){
-            var e=els[i];
-            var t=(e.textContent||'').replace(/\\s+/g,' ').trim();
-            if(t===txt){
-              var n=e;
-              for(var k=0;k<6 && n;k++){
-                try{ if(n.tagName==='A'||n.onclick||n.getAttribute('onclick')){ fire(n); return true; } }catch(e2){}
-                n=n.parentElement;
-              }
-              fire(e); return true;
-            }
-          }
-        }
-        return false;
-      }
-      var steps=['Internet','Sécurité','Critères de filtrage'];
-      var idx=0;
-      (function next(){
-        if(idx>=steps.length) return;
-        clickText(steps[idx]); idx++;
-        setTimeout(next, 1300);
-      })();
-    })();
-  ''';
-
-  Future<void> _goToBlocking() async {
-    if (_controller == null) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-        content: Text('Ouverture de la page de filtrage MAC…'),
-        duration: Duration(seconds: 2),
+  /// Affiche un guide clair pour bloquer un appareil. L'interface du routeur
+  /// étant une SPA à cadres, on ne peut pas naviguer de façon fiable par script :
+  /// on montre donc la marche à suivre, toujours valable.
+  void _showBlockingGuide() {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      showDragHandle: true,
+      builder: (ctx) => DraggableScrollableSheet(
+        expand: false,
+        initialChildSize: 0.7,
+        maxChildSize: 0.92,
+        builder: (ctx, scroll) => ListView(
+          controller: scroll,
+          padding: const EdgeInsets.fromLTRB(20, 0, 20, 24),
+          children: [
+            const Row(
+              children: [
+                Icon(Icons.block, color: _orange),
+                SizedBox(width: 8),
+                Text('Bloquer un appareil',
+                    style:
+                        TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
+              ],
+            ),
+            const SizedBox(height: 16),
+            _guideStep('1', 'Menu du haut → Internet'),
+            _guideStep('2', 'Menu de gauche → Sécurité'),
+            _guideStep('3', 'Onglet → Critères de filtrage'),
+            _guideStep('4', 'Déplie la section → Filtre MAC'),
+            const Divider(height: 28),
+            const Text('Sur la page Filtre MAC :',
+                style: TextStyle(fontWeight: FontWeight.bold)),
+            const SizedBox(height: 10),
+            _guideBullet(
+                "Ouvre « Configuration du filtre et du mode de filtrage » et "
+                "active le mode qui INTERDIT (liste noire) les adresses listées."),
+            _guideBullet(
+                "Dans « Filtre MAC → Nouvel élément » : mets un Nom, laisse "
+                "Type = Routing et Protocole = Any."),
+            _guideBullet(
+                "Clique « Sélectionnez parmi les périphériques associés », "
+                "coche l'appareil à bloquer (sa MAC se remplit), puis Appliquer."),
+            const SizedBox(height: 16),
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: Colors.red.withValues(alpha: 0.08),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: const Row(
+                children: [
+                  Icon(Icons.warning_amber, color: Colors.red),
+                  SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      "Ne bloque pas ton propre téléphone "
+                      "(realme-GT-NEO-3-150W) : tu te couperais du WiFi !",
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 20),
+            FilledButton(
+              onPressed: () => Navigator.pop(ctx),
+              style: FilledButton.styleFrom(
+                backgroundColor: _orange,
+                minimumSize: const Size.fromHeight(46),
+              ),
+              child: const Text("J'ai compris"),
+            ),
+          ],
+        ),
       ),
     );
-    await _controller!.evaluateJavascript(source: _gotoBlockingJs);
   }
+
+  Widget _guideStep(String n, String text) => Padding(
+        padding: const EdgeInsets.symmetric(vertical: 6),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            CircleAvatar(
+              radius: 14,
+              backgroundColor: _orange,
+              child: Text(n,
+                  style: const TextStyle(
+                      color: Colors.white, fontWeight: FontWeight.bold)),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+                child: Text(text, style: const TextStyle(fontSize: 15))),
+          ],
+        ),
+      );
+
+  Widget _guideBullet(String text) => Padding(
+        padding: const EdgeInsets.symmetric(vertical: 5),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text('•  ', style: TextStyle(fontWeight: FontWeight.bold)),
+            Expanded(child: Text(text)),
+          ],
+        ),
+      );
 
   // --- Dialogues -------------------------------------------------------------
 
@@ -371,9 +426,9 @@ class _RouterWebScreenState extends State<RouterWebScreen> {
           child: Padding(
             padding: const EdgeInsets.fromLTRB(12, 6, 12, 10),
             child: FilledButton.icon(
-              onPressed: _goToBlocking,
+              onPressed: _showBlockingGuide,
               icon: const Icon(Icons.block),
-              label: const Text('Bloquer un appareil (Filtre MAC)'),
+              label: const Text('Comment bloquer un appareil ?'),
               style: FilledButton.styleFrom(
                 backgroundColor: _orange,
                 foregroundColor: Colors.white,
