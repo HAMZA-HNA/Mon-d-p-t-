@@ -117,33 +117,43 @@ class _RouterWebScreenState extends State<RouterWebScreen> {
   /// Internet → Sécurité → Critères de filtrage.
   String get _gotoBlockingJs => '''
     (function(){
-      function docs(){
-        var ds=[document];
-        try{ for(var i=0;i<window.frames.length;i++){ try{ ds.push(window.frames[i].document);}catch(e){} } }catch(e){}
-        return ds;
+      function allDocs(win, acc){
+        try{ acc.push(win.document); }catch(e){}
+        try{ for(var i=0;i<win.frames.length;i++){ allDocs(win.frames[i], acc); } }catch(e){}
+        return acc;
+      }
+      function fire(el){
+        ['mouseover','mousedown','mouseup','click'].forEach(function(type){
+          try{ el.dispatchEvent(new MouseEvent(type,{bubbles:true,cancelable:true,view:window})); }catch(e){}
+        });
       }
       function clickText(txt){
-        var ds=docs();
+        var ds=allDocs(window, []);
         for(var d=0; d<ds.length; d++){
-          var els=ds[d].querySelectorAll('a,span,td,div,li,button,label');
+          var els;
+          try{ els=ds[d].querySelectorAll('a,span,td,div,li,button,label,p'); }catch(e){ continue; }
           for(var i=0;i<els.length;i++){
             var e=els[i];
             var t=(e.textContent||'').replace(/\\s+/g,' ').trim();
             if(t===txt){
               var n=e;
-              for(var k=0;k<5 && n;k++){
-                if(n.tagName==='A'||n.onclick||n.getAttribute('onclick')){ n.click(); return true; }
+              for(var k=0;k<6 && n;k++){
+                try{ if(n.tagName==='A'||n.onclick||n.getAttribute('onclick')){ fire(n); return true; } }catch(e2){}
                 n=n.parentElement;
               }
-              e.click(); return true;
+              fire(e); return true;
             }
           }
         }
         return false;
       }
-      clickText('Internet');
-      setTimeout(function(){ clickText('Sécurité'); }, 900);
-      setTimeout(function(){ clickText('Critères de filtrage'); }, 2000);
+      var steps=['Internet','Sécurité','Critères de filtrage'];
+      var idx=0;
+      (function next(){
+        if(idx>=steps.length) return;
+        clickText(steps[idx]); idx++;
+        setTimeout(next, 1300);
+      })();
     })();
   ''';
 
