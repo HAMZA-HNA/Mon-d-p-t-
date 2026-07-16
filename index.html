@@ -1,0 +1,517 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Trouve le nombre</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+
+  html, body {
+    height: 100%;
+    overflow: hidden;
+    touch-action: manipulation;
+    font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+    user-select: none;
+    -webkit-user-select: none;
+  }
+
+  body {
+    background: linear-gradient(160deg, #1a2a6c 0%, #45217c 50%, #7b2d8b 100%);
+    display: flex;
+    flex-direction: column;
+    color: #fff;
+  }
+
+  /* ---------- En-tête ---------- */
+  header {
+    flex: 0 0 auto;
+    padding: 10px 12px 8px;
+    text-align: center;
+  }
+
+  h1 {
+    font-size: clamp(18px, 5vw, 26px);
+    letter-spacing: 1px;
+    background: linear-gradient(90deg, #ffd93d, #ff6b6b, #6bcbff);
+    -webkit-background-clip: text;
+    background-clip: text;
+    -webkit-text-fill-color: transparent;
+    margin-bottom: 6px;
+  }
+
+  .infos {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+
+  .badge {
+    background: rgba(255, 255, 255, 0.14);
+    border: 1px solid rgba(255, 255, 255, 0.25);
+    border-radius: 999px;
+    padding: 5px 12px;
+    font-size: clamp(13px, 3.6vw, 16px);
+    font-weight: 600;
+    white-space: nowrap;
+  }
+
+  #compteur strong { color: #ffd93d; }
+  #chrono { min-width: 92px; font-variant-numeric: tabular-nums; }
+
+  #btnNouvelle {
+    background: linear-gradient(180deg, #ff8a5c, #ff5252);
+    border: none;
+    border-radius: 999px;
+    color: #fff;
+    font-size: clamp(13px, 3.6vw, 16px);
+    font-weight: 700;
+    padding: 8px 16px;
+    box-shadow: 0 3px 0 #c73030;
+    cursor: pointer;
+  }
+  #btnNouvelle:active { transform: translateY(2px); box-shadow: 0 1px 0 #c73030; }
+
+  /* ---------- Zone de jeu ---------- */
+  #zone {
+    flex: 1 1 auto;
+    position: relative;
+    margin: 4px 6px 10px;
+    border-radius: 18px;
+    background: rgba(255, 255, 255, 0.06);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    overflow: hidden;
+  }
+
+  .nombre {
+    position: absolute;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 50%;
+    font-weight: 800;
+    color: #fff;
+    cursor: pointer;
+    border: none;
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.35), inset 0 -3px 0 rgba(0, 0, 0, 0.18);
+    transform: translate(-50%, -50%);
+    transition: transform 0.12s ease, filter 0.15s ease;
+    line-height: 1;
+    padding: 0;
+  }
+  .nombre:active { transform: translate(-50%, -50%) scale(0.9); }
+
+  .nombre.coche {
+    background: linear-gradient(180deg, #4cd97b, #2eb45f) !important;
+    filter: grayscale(15%);
+    animation: pop 0.3s ease;
+  }
+  .nombre.coche::after {
+    content: "✓";
+    position: absolute;
+    top: -6px;
+    right: -4px;
+    background: #fff;
+    color: #22984c;
+    border-radius: 50%;
+    width: 45%;
+    height: 45%;
+    min-width: 16px;
+    min-height: 16px;
+    font-size: 70%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
+  }
+
+  @keyframes pop {
+    0%   { transform: translate(-50%, -50%) scale(0.7); }
+    55%  { transform: translate(-50%, -50%) scale(1.18); }
+    100% { transform: translate(-50%, -50%) scale(1); }
+  }
+
+  /* ---------- Victoire ---------- */
+  #victoire {
+    position: fixed;
+    inset: 0;
+    background: rgba(20, 10, 50, 0.82);
+    display: none;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    z-index: 50;
+    text-align: center;
+    padding: 20px;
+  }
+  #victoire.visible { display: flex; }
+
+  #victoire .trophee {
+    font-size: 72px;
+    animation: bondir 0.8s ease infinite alternate;
+  }
+  @keyframes bondir {
+    from { transform: translateY(0) scale(1); }
+    to   { transform: translateY(-18px) scale(1.12); }
+  }
+
+  #victoire h2 {
+    font-size: clamp(26px, 8vw, 40px);
+    color: #ffd93d;
+    margin: 12px 0 6px;
+  }
+  #victoire p { font-size: clamp(15px, 4.5vw, 19px); opacity: 0.9; }
+
+  .confetti {
+    position: fixed;
+    top: -20px;
+    width: 10px;
+    height: 16px;
+    z-index: 60;
+    border-radius: 3px;
+    animation: tomber linear forwards;
+    pointer-events: none;
+  }
+  @keyframes tomber {
+    to { transform: translateY(110vh) rotate(720deg); opacity: 0.6; }
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>🔢 Trouve le nombre !</h1>
+  <div class="infos">
+    <span class="badge" id="compteur"><strong>0</strong> / 50 trouvés</span>
+    <span class="badge" id="chrono">⏱ 0,0 s</span>
+    <span class="badge" id="forme">✨ Forme</span>
+    <button id="btnNouvelle">🔄 Nouvelle partie</button>
+  </div>
+</header>
+
+<div id="zone"></div>
+
+<div id="victoire">
+  <div class="trophee">🏆</div>
+  <h2>Bravo !</h2>
+  <p>Les 50 nombres sont trouvés&nbsp;!<br>Nouvelle partie dans un instant…</p>
+</div>
+
+<script>
+(function () {
+  "use strict";
+
+  var TOTAL = 50;
+  var zone = document.getElementById("zone");
+  var compteurEl = document.getElementById("compteur");
+  var chronoEl = document.getElementById("chrono");
+  var formeEl = document.getElementById("forme");
+  var victoireEl = document.getElementById("victoire");
+  var btnNouvelle = document.getElementById("btnNouvelle");
+
+  var COULEURS = [
+    ["#ff6b6b", "#d94848"], ["#ff9f43", "#d97f26"], ["#feca57", "#d9a832"],
+    ["#1dd1a1", "#12a180"], ["#54a0ff", "#3577d1"], ["#5f27cd", "#4a1da3"],
+    ["#ff6bcb", "#d148a3"], ["#48dbfb", "#28aed1"]
+  ];
+
+  var etat = {
+    positions: [],      // positions normalisées (0..1), une par nombre
+    plein: false,       // la forme occupe-t-elle tout le rectangle ?
+    coches: [],         // état coché de chaque nombre
+    trouves: 0,
+    formeIndex: -1,
+    debutRecherche: 0,
+    chronoTimer: null,
+    finie: false
+  };
+
+  /* ---------- Générateurs de formes (coordonnées 0..1) ---------- */
+
+  function genGrille(n, aspect) {
+    var cols = Math.max(4, Math.min(10, Math.round(Math.sqrt(n * aspect))));
+    var rows = Math.ceil(n / cols);
+    var pts = [];
+    for (var i = 0; i < n; i++) {
+      var r = Math.floor(i / cols);
+      var dansLigne = (r === rows - 1) ? (n - r * cols) : cols;
+      var c = i - r * cols;
+      var decale = (cols - dansLigne) / 2; // dernière ligne centrée
+      pts.push({
+        x: (c + decale + 0.5) / cols,
+        y: (r + 0.5) / rows
+      });
+    }
+    return pts;
+  }
+
+  function genCercle(n) {
+    var rayons = [0.13, 0.25, 0.36, 0.47];
+    var somme = rayons.reduce(function (a, b) { return a + b; }, 0);
+    var comptes = rayons.map(function (r) { return Math.round(n * r / somme); });
+    var total = comptes.reduce(function (a, b) { return a + b; }, 0);
+    comptes[comptes.length - 1] += n - total;
+    var pts = [];
+    rayons.forEach(function (r, k) {
+      var m = comptes[k];
+      var offset = Math.random() * Math.PI * 2;
+      for (var i = 0; i < m; i++) {
+        var a = offset + (i / m) * Math.PI * 2;
+        pts.push({ x: 0.5 + r * Math.cos(a), y: 0.5 + r * Math.sin(a) });
+      }
+    });
+    return pts;
+  }
+
+  function genSpirale(n) {
+    var tours = 3.1;
+    var thetaMax = tours * 2 * Math.PI;
+    var c = 0.455 / thetaMax;
+    var theta0 = 1.1;
+    var longueur = (c / 2) * (thetaMax * thetaMax - theta0 * theta0);
+    var pas = longueur / (n - 1);
+    var pts = [];
+    var theta = theta0;
+    for (var i = 0; i < n; i++) {
+      var r = c * theta;
+      pts.push({ x: 0.5 + r * Math.cos(theta), y: 0.5 + r * Math.sin(theta) });
+      theta += pas / Math.max(c * theta, 0.02);
+    }
+    return pts;
+  }
+
+  function genDispersion(n) {
+    var pts = [];
+    var d = 0.135;
+    var essais = 0;
+    while (pts.length < n) {
+      var x = 0.05 + Math.random() * 0.90;
+      var y = 0.05 + Math.random() * 0.90;
+      var ok = true;
+      for (var i = 0; i < pts.length; i++) {
+        var dx = pts[i].x - x, dy = pts[i].y - y;
+        if (dx * dx + dy * dy < d * d) { ok = false; break; }
+      }
+      if (ok) pts.push({ x: x, y: y });
+      if (++essais > 2500) { essais = 0; d *= 0.93; }
+    }
+    return pts;
+  }
+
+  function pointCoeur(t, s) {
+    var x = 16 * Math.pow(Math.sin(t), 3);
+    var y = 13 * Math.cos(t) - 5 * Math.cos(2 * t) - 2 * Math.cos(3 * t) - Math.cos(4 * t);
+    return {
+      x: 0.5 + s * (x / 17) * 0.47,
+      y: 0.5 - s * ((y + 2.5) / 17) * 0.47
+    };
+  }
+
+  function genCoeur(n) {
+    var pts = [];
+    var externe = 30, interne = n - externe - 1;
+    for (var i = 0; i < externe; i++) {
+      pts.push(pointCoeur(((i + 0.5) / externe) * Math.PI * 2, 1));
+    }
+    for (var j = 0; j < interne; j++) {
+      pts.push(pointCoeur(((j + 0.5) / interne) * Math.PI * 2, 0.58));
+    }
+    pts.push({ x: 0.5, y: 0.46 }); // un nombre au centre du cœur
+    return pts;
+  }
+
+  function anneauLosange(m, s, pts) {
+    var sommets = [[0.5, 0.5 - s], [0.5 + s, 0.5], [0.5, 0.5 + s], [0.5 - s, 0.5]];
+    for (var i = 0; i < m; i++) {
+      var p = (i / m) * 4;
+      var seg = Math.floor(p) % 4;
+      var f = p - Math.floor(p);
+      var a = sommets[seg], b = sommets[(seg + 1) % 4];
+      pts.push({ x: a[0] + (b[0] - a[0]) * f, y: a[1] + (b[1] - a[1]) * f });
+    }
+  }
+
+  function genLosange(n) {
+    var pts = [];
+    anneauLosange(22, 0.47, pts);
+    anneauLosange(15, 0.33, pts);
+    anneauLosange(9, 0.19, pts);
+    anneauLosange(n - pts.length - 1, 0.08, pts);
+    pts.push({ x: 0.5, y: 0.5 });
+    return pts;
+  }
+
+  var FORMES = [
+    { nom: "Grille",     emoji: "🔲", plein: true,  gen: genGrille },
+    { nom: "Cercle",     emoji: "⭕", plein: false, gen: genCercle },
+    { nom: "Spirale",    emoji: "🌀", plein: false, gen: genSpirale },
+    { nom: "Dispersion", emoji: "✨", plein: true,  gen: genDispersion },
+    { nom: "Cœur",       emoji: "❤️", plein: false, gen: genCoeur },
+    { nom: "Losange",    emoji: "🔷", plein: false, gen: genLosange }
+  ];
+
+  /* ---------- Utilitaires ---------- */
+
+  function melanger(tab) {
+    for (var i = tab.length - 1; i > 0; i--) {
+      var j = Math.floor(Math.random() * (i + 1));
+      var t = tab[i]; tab[i] = tab[j]; tab[j] = t;
+    }
+    return tab;
+  }
+
+  /* ---------- Rendu ---------- */
+
+  function dessiner() {
+    var w = zone.clientWidth, h = zone.clientHeight;
+    if (!w || !h) return;
+
+    var marge = 8;
+    var px = [];
+    var i;
+
+    if (etat.plein) {
+      for (i = 0; i < TOTAL; i++) {
+        px.push({
+          x: marge + etat.positions[i].x * (w - 2 * marge),
+          y: marge + etat.positions[i].y * (h - 2 * marge)
+        });
+      }
+    } else {
+      var cote = Math.min(w, h) - 2 * marge;
+      var ox = (w - cote) / 2, oy = (h - cote) / 2;
+      for (i = 0; i < TOTAL; i++) {
+        px.push({
+          x: ox + etat.positions[i].x * cote,
+          y: oy + etat.positions[i].y * cote
+        });
+      }
+    }
+
+    // taille des pastilles : la plus grande possible sans chevauchement
+    var minDist = Infinity;
+    for (i = 0; i < TOTAL; i++) {
+      for (var j = i + 1; j < TOTAL; j++) {
+        var dx = px[i].x - px[j].x, dy = px[i].y - px[j].y;
+        var d2 = dx * dx + dy * dy;
+        if (d2 < minDist) minDist = d2;
+      }
+    }
+    minDist = Math.sqrt(minDist);
+    var taille = Math.max(28, Math.min(64, minDist * 1.02));
+
+    zone.innerHTML = "";
+    for (i = 0; i < TOTAL; i++) {
+      var btn = document.createElement("button");
+      btn.className = "nombre" + (etat.coches[i] ? " coche" : "");
+      btn.textContent = String(i + 1);
+      var coul = COULEURS[i % COULEURS.length];
+      btn.style.background = "linear-gradient(180deg," + coul[0] + "," + coul[1] + ")";
+      btn.style.width = taille + "px";
+      btn.style.height = taille + "px";
+      btn.style.fontSize = Math.round(taille * 0.42) + "px";
+      btn.style.left = px[i].x + "px";
+      btn.style.top = px[i].y + "px";
+      btn.dataset.n = i;
+      zone.appendChild(btn);
+    }
+  }
+
+  /* ---------- Logique du jeu ---------- */
+
+  function majCompteur() {
+    compteurEl.innerHTML = "<strong>" + etat.trouves + "</strong> / " + TOTAL + " trouvés";
+  }
+
+  function resetChrono() {
+    etat.debutRecherche = Date.now();
+  }
+
+  function tickChrono() {
+    if (etat.finie) return;
+    var s = (Date.now() - etat.debutRecherche) / 1000;
+    chronoEl.textContent = "⏱ " + s.toFixed(1).replace(".", ",") + " s";
+  }
+
+  function nouvellePartie() {
+    var idx;
+    do {
+      idx = Math.floor(Math.random() * FORMES.length);
+    } while (FORMES.length > 1 && idx === etat.formeIndex);
+    etat.formeIndex = idx;
+
+    var forme = FORMES[idx];
+    var aspect = Math.max(0.3, zone.clientWidth / Math.max(1, zone.clientHeight));
+    var pos = forme.gen(TOTAL, aspect);
+
+    etat.positions = melanger(pos); // nombres placés aléatoirement sur la forme
+    etat.plein = forme.plein;
+    etat.coches = new Array(TOTAL).fill(false);
+    etat.trouves = 0;
+    etat.finie = false;
+
+    formeEl.textContent = forme.emoji + " " + forme.nom;
+    victoireEl.classList.remove("visible");
+    majCompteur();
+    resetChrono();
+    tickChrono();
+    dessiner();
+  }
+
+  function lancerConfettis() {
+    var couleurs = ["#ffd93d", "#ff6b6b", "#54a0ff", "#1dd1a1", "#ff9f43", "#ff6bcb"];
+    for (var i = 0; i < 80; i++) {
+      var c = document.createElement("div");
+      c.className = "confetti";
+      c.style.left = Math.random() * 100 + "vw";
+      c.style.background = couleurs[i % couleurs.length];
+      c.style.animationDuration = (1.6 + Math.random() * 1.8) + "s";
+      c.style.animationDelay = (Math.random() * 0.7) + "s";
+      c.style.width = (7 + Math.random() * 7) + "px";
+      c.style.height = (12 + Math.random() * 8) + "px";
+      document.body.appendChild(c);
+      setTimeout(function (el) { el.remove(); }.bind(null, c), 4500);
+    }
+  }
+
+  function victoire() {
+    etat.finie = true;
+    victoireEl.classList.add("visible");
+    lancerConfettis();
+    setTimeout(nouvellePartie, 3200); // nouvelle forme + nouvelles positions
+  }
+
+  zone.addEventListener("click", function (e) {
+    var btn = e.target.closest(".nombre");
+    if (!btn || etat.finie) return;
+    var i = parseInt(btn.dataset.n, 10);
+
+    if (etat.coches[i]) {
+      // décocher en cas d'erreur
+      etat.coches[i] = false;
+      etat.trouves--;
+      btn.classList.remove("coche");
+    } else {
+      etat.coches[i] = true;
+      etat.trouves++;
+      btn.classList.add("coche");
+      resetChrono(); // le chrono repart pour le nombre suivant
+    }
+    majCompteur();
+    if (etat.trouves === TOTAL) victoire();
+  });
+
+  btnNouvelle.addEventListener("click", nouvellePartie);
+
+  window.addEventListener("resize", function () {
+    if (etat.positions.length) dessiner();
+  });
+
+  etat.chronoTimer = setInterval(tickChrono, 100);
+  nouvellePartie();
+})();
+</script>
+</body>
+</html>
