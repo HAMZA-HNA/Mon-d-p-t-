@@ -104,27 +104,11 @@
   .nombre:active { transform: translate(-50%, -50%) scale(0.9); }
 
   .nombre.coche {
-    background: linear-gradient(180deg, #4cd97b, #2eb45f) !important;
-    filter: grayscale(15%);
+    background: #ffffff !important;
+    color: #9a9ab5;
+    opacity: 0.25;
+    box-shadow: none;
     animation: pop 0.3s ease;
-  }
-  .nombre.coche::after {
-    content: "✓";
-    position: absolute;
-    top: -6px;
-    right: -4px;
-    background: #fff;
-    color: #22984c;
-    border-radius: 50%;
-    width: 45%;
-    height: 45%;
-    min-width: 16px;
-    min-height: 16px;
-    font-size: 70%;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
   }
 
   @keyframes pop {
@@ -309,16 +293,32 @@
     };
   }
 
+  // Points répartis à distance égale le long du contour du cœur
+  // (un pas uniforme sur t entasse les points à la pointe et au creux)
+  function contourCoeur(count, s) {
+    var N = 720;
+    var echant = [pointCoeur(0, s)];
+    var longs = [0];
+    for (var i = 1; i <= N; i++) {
+      var p = pointCoeur((i / N) * Math.PI * 2, s);
+      var q = echant[i - 1];
+      longs.push(longs[i - 1] + Math.hypot(p.x - q.x, p.y - q.y));
+      echant.push(p);
+    }
+    var total = longs[N];
+    var res = [];
+    var k = 0;
+    for (var j = 0; j < count; j++) {
+      var cible = ((j + 0.5) / count) * total;
+      while (k < N - 1 && longs[k + 1] < cible) k++;
+      res.push(echant[k]);
+    }
+    return res;
+  }
+
   function genCoeur(n) {
-    var pts = [];
-    var externe = 30, interne = n - externe - 1;
-    for (var i = 0; i < externe; i++) {
-      pts.push(pointCoeur(((i + 0.5) / externe) * Math.PI * 2, 1));
-    }
-    for (var j = 0; j < interne; j++) {
-      pts.push(pointCoeur(((j + 0.5) / interne) * Math.PI * 2, 0.58));
-    }
-    pts.push({ x: 0.5, y: 0.46 }); // un nombre au centre du cœur
+    var pts = contourCoeur(30, 1).concat(contourCoeur(n - 31, 0.55));
+    pts.push({ x: 0.5, y: 0.42 }); // un nombre au centre du cœur
     return pts;
   }
 
@@ -353,6 +353,31 @@
   ];
 
   /* ---------- Utilitaires ---------- */
+
+  // Écarte les points trop proches pour qu'aucun nombre n'en cache un autre
+  function ecarter(pts, dmin) {
+    for (var iter = 0; iter < 90; iter++) {
+      var bouge = false;
+      for (var i = 0; i < pts.length; i++) {
+        for (var j = i + 1; j < pts.length; j++) {
+          var dx = pts[j].x - pts[i].x, dy = pts[j].y - pts[i].y;
+          var d = Math.sqrt(dx * dx + dy * dy);
+          if (d < dmin) {
+            bouge = true;
+            if (d < 1e-4) { dx = Math.random() - 0.5; dy = Math.random() - 0.5; d = Math.sqrt(dx * dx + dy * dy); }
+            var pousse = (dmin - d) / d / 2;
+            pts[i].x -= dx * pousse; pts[i].y -= dy * pousse;
+            pts[j].x += dx * pousse; pts[j].y += dy * pousse;
+          }
+        }
+      }
+      if (!bouge) break;
+    }
+    for (var m = 0; m < pts.length; m++) {
+      pts[m].x = Math.min(0.97, Math.max(0.03, pts[m].x));
+      pts[m].y = Math.min(0.97, Math.max(0.03, pts[m].y));
+    }
+  }
 
   function melanger(tab) {
     for (var i = tab.length - 1; i > 0; i--) {
@@ -400,7 +425,7 @@
       }
     }
     minDist = Math.sqrt(minDist);
-    var taille = Math.max(28, Math.min(64, minDist * 1.02));
+    var taille = Math.max(26, Math.min(64, minDist * 0.95));
 
     zone.innerHTML = "";
     for (i = 0; i < TOTAL; i++) {
@@ -445,6 +470,7 @@
     var forme = FORMES[idx];
     var aspect = Math.max(0.3, zone.clientWidth / Math.max(1, zone.clientHeight));
     var pos = forme.gen(TOTAL, aspect);
+    if (!forme.plein) ecarter(pos, 0.1); // grille et dispersion sont déjà bien espacées
 
     etat.positions = melanger(pos); // nombres placés aléatoirement sur la forme
     etat.plein = forme.plein;
