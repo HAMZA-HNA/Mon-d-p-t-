@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Pastilles colorées évoquant les nombres du jeu -->
+    <path
+        android:fillColor="#FF6B6B"
+        android:pathData="M42,42 a12,12 0 1,0 24,0 a12,12 0 1,0 -24,0" />
+    <path
+        android:fillColor="#FECA57"
+        android:pathData="M26,62 a9,9 0 1,0 18,0 a9,9 0 1,0 -18,0" />
+    <path
+        android:fillColor="#54A0FF"
+        android:pathData="M62,64 a9,9 0 1,0 18,0 a9,9 0 1,0 -18,0" />
+    <path
+        android:fillColor="#1DD1A1"
+        android:pathData="M46,76 a7,7 0 1,0 14,0 a7,7 0 1,0 -14,0" />
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M49,30 a5,5 0 1,0 10,0 a5,5 0 1,0 -10,0" />
+</vector>

@@ -1,0 +1,58 @@
+name: Construire l'APK
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - claude/trouve-nombre-game-jq2tby
+      - main
+    paths:
+      - index.html
+      - android/**
+      - .github/workflows/build-apk.yml
+
+permissions:
+  contents: write
+
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+
+      - name: Copier le jeu dans les assets de l'application
+        run: |
+          mkdir -p android/app/src/main/assets
+          cp index.html android/app/src/main/assets/index.html
+
+      - name: Compiler l'APK
+        working-directory: android
+        run: gradle assembleDebug
+
+      - name: Renommer l'APK
+        run: cp android/app/build/outputs/apk/debug/app-debug.apk TrouveLeNombre.apk
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: TrouveLeNombre-apk
+          path: TrouveLeNombre.apk
+
+      - name: Publier dans les Releases
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release delete apk --yes || true
+          git push --delete origin apk || true
+          gh release create apk TrouveLeNombre.apk \
+            --target "${GITHUB_SHA}" \
+            --title "Trouve le nombre — APK Android" \
+            --notes "Téléchargez **TrouveLeNombre.apk** ci-dessous sur votre téléphone, ouvrez le fichier et acceptez l'installation (autorisez les « sources inconnues » si demandé). Le jeu fonctionne ensuite sans connexion Internet."
